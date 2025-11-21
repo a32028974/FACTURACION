@@ -599,10 +599,26 @@ async function generarCierre(){
   const d=qs('#cierreDate').value||new Date().toISOString().slice(0,10);
   Swal.fire({title:'Generando PDF…',allowOutsideClick:false,didOpen:()=>Swal.showLoading()});
   try{
-    const r=await apiGet({action:'cierre_pdf', code:emp.codigo, date:d});
-    Swal.close();
-    if(r.ok&&r.data&&r.data.url){ window.open(r.data.url,'_blank'); Swal.fire('Cierre generado', r.data.name||'Listo para imprimir','success'); }
-    else{ Swal.fire('Error', (r&&r.error)||'No se pudo generar el PDF','error'); }
+    const r = await apiGet({ action: 'cierre_pdf', code: emp.codigo, date: d });
+Swal.close();
+
+if (r.ok && r.data && r.data.url) {
+  // Abro el PDF en otra pestaña
+  window.open(r.data.url, '_blank');
+  // Aviso de éxito
+  Swal.fire(
+    'Cierre generado',
+    r.data.name || 'Listo para imprimir',
+    'success'
+  );
+} else {
+  Swal.fire(
+    'Error',
+    (r && r.error) || 'No se pudo generar el PDF',
+    'error'
+  );
+}
+
   }catch(e){ Swal.close(); Swal.fire('Error de red', e.message||'Falló la conexión','error'); }
 }
 
@@ -649,12 +665,15 @@ function init(){
   });
 
   showLogin();
-  const modal = qs('#loginModal');
-  new MutationObserver(()=>setTimeout(()=>qs('#empCode').focus(),120)).observe(modal,{attributes:true,attributeFilter:['class']});
+const modal = qs('#loginModal');
+new MutationObserver(() => {
+  setTimeout(() => qs('#empCode').focus(), 120);
+}).observe(modal, { attributes: true, attributeFilter: ['class'] });
 
-  cargarUltimas();
+cargarUltimas();
 }
 init();
+    
 </script>
 </body>
 </html>
