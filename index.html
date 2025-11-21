@@ -33,7 +33,9 @@
   @keyframes sp{to{transform:rotate(360deg)}}
 
   .two-pay{ display:grid; grid-template-columns:150px 150px 150px 150px; gap:10px; margin-top:10px; }
-  @media (max-width:720px){ .two-pay{ grid-template-columns:1fr 1fr; } }
+  @media (max-width:720px){
+    .two-pay{ grid-template-columns:1fr 1fr; }
+  }
 </style>
 </head>
 <body>
@@ -51,6 +53,44 @@
     <h3>Datos del Comprobante </h3>
     <div class="pill">Fecha: <span id="fechaHoy" style="margin-left:6px"></span></div>
   </section>
+
+  <!-- 🔹 NUEVA SECCIÓN: DATOS PARA AFIP -->
+  <section class="card">
+    <h3>Datos del cliente / Factura AFIP</h3>
+    <div style="display:grid; grid-template-columns:150px 180px 220px 150px; gap:10px; align-items:end;">
+      <div>
+        <label>Tipo de documento</label>
+        <select id="docTipo">
+          <option value="CF">Consumidor final (CF)</option>
+          <option value="CUIT">CUIT</option>
+        </select>
+      </div>
+      <div>
+        <label>N° documento (para CUIT)</label>
+        <input id="docNumero" placeholder="Solo números">
+      </div>
+      <div>
+        <label>Condición frente al IVA</label>
+        <select id="condIva">
+          <option value="CF">Consumidor Final</option>
+          <option value="RI">Resp. Inscripto</option>
+          <option value="EX">Exento</option>
+          <option value="MT">Monotributo</option>
+        </select>
+      </div>
+      <div>
+        <label>Impresión</label>
+        <select id="printMode">
+          <option value="A4">A4</option>
+          <option value="TICKET">Ticket 80mm</option>
+        </select>
+      </div>
+    </div>
+    <p class="muted" style="margin-top:8px;font-size:12px">
+      Si dejás "Consumidor final", se usa documento 0 y condición IVA = CF.
+    </p>
+  </section>
+  <!-- 🔹 FIN SECCIÓN AFIP -->
 
   <section class="card">
     <h3>Conceptos a facturar</h3>
@@ -214,276 +254,4 @@
 <div class="modal hidden" id="movModal" aria-hidden="true">
   <div class="inner" style="max-width:360px;">
     <div class="spinner"></div>
-    <b>Registrando movimiento…</b>
-    <p class="muted" style="margin:8px 0 0">Guardando en Caja</p>
-  </div>
-</div>
-
-<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-<script>
-const API_URL = 'https://script.google.com/macros/s/AKfycbxU9QTjxgUjeD3l2cLvXnLHB3r5ZZ_mAvZ46OnE2vzbRv3EaTeRSuMGB37Y_0wPfkUHng/exec';
-const WITHDRAW_AUTH = ['JU','JI'];
-
-const qs = s => document.querySelector(s);
-const money = n => new Intl.NumberFormat('es-AR',{style:'currency',currency:'ARS',maximumFractionDigits:0}).format(Number(n||0));
-
-/* ===== Empleado (memoria) ===== */
-let CURRENT_EMP = null;
-function setEmp(emp){
-  CURRENT_EMP = { codigo: String(emp.codigo||'').toUpperCase(), nombre: emp.nombre||'' };
-  qs('#empName').textContent = CURRENT_EMP.nombre || '—';
-  toggleAutorizados();
-}
-function clearEmp(){ CURRENT_EMP = null; qs('#empName').textContent = '—'; toggleAutorizados(); }
-function getEmp(){ return CURRENT_EMP; }
-
-/* ===== Modales ===== */
-function showLogin(){ clearEmp(); qs('#loginModal').classList.remove('hidden'); qs('#empCode').value=''; qs('#loginMsg').textContent=''; setTimeout(()=>qs('#empCode').focus(),120); }
-function hideLogin(){ qs('#loginModal').classList.add('hidden'); }
-function showFinding(){ qs('#findModal').classList.remove('hidden'); }
-function hideFinding(){ qs('#findModal').classList.add('hidden'); }
-function showMov(){ qs('#movModal').classList.remove('hidden'); }
-function hideMov(){ qs('#movModal').classList.add('hidden'); }
-
-/* ===== API ===== */
-async function apiGet(p){ const r=await fetch(API_URL+'?'+new URLSearchParams(p).toString()); return r.json(); }
-async function apiPost(payload){ const r=await fetch(API_URL,{method:'POST', body:JSON.stringify(payload)}); return r.json(); }
-
-/* ===== Formato en vivo (puntos cada mil) ===== */
-const nf = new Intl.NumberFormat('es-AR'); // sin decimales
-
-function onlyDigits(v){ return (v||'').replace(/\D+/g,''); }
-
-function setFormatted(el, digits){
-  if(digits===''){ el.value=''; el.dataset.raw=''; return; }
-  const n = parseInt(digits,10);
-  el.dataset.raw = String(n);
-  el.value = nf.format(n);
-}
-
-function getNumber(el){
-  const raw = el.dataset.raw ?? '';
-  if(raw!=='') return parseInt(raw,10);
-  const d = onlyDigits(el.value);
-  return d ? parseInt(d,10) : 0;
-}
-
-function attachMoneyMask(id){
-  const el = qs(id);
-  el.addEventListener('input', ()=>{
-    const d = onlyDigits(el.value);
-    setFormatted(el, d);
-    if(id==='#inpUnit'){ recalcDosMedios(); }
-  });
-  el.addEventListener('blur', ()=>{
-    const d = onlyDigits(el.value);
-    setFormatted(el, d);
-    if(id==='#inpUnit'){ recalcDosMedios(); }
-  });
-}
-
-/* ===== Últimas / Lookup ===== */
-let SAVING=false;
-function showSaving(){ Swal.fire({title:'Guardando…',allowOutsideClick:false,didOpen:()=>Swal.showLoading()}); }
-function closeSaving(){ Swal.close(); }
-
-async function cargarUltimas(){
-  const r = await apiGet({action:'ultimas', n:3});
-  const el = qs('#ultimas');
-  if(!r.ok || !r.data || r.data.length===0){ el.textContent='Sin ventas aún.'; return; }
-  el.innerHTML = r.data.map(u=>`<div class="pill" style="display:block;margin:6px 0">${u.hora} • ${u.emp} • ${u.fdp} • ${u.desc} • <b>${money(u.total)}</b></div>`).join('');
-}
-
-async function buscarStock(num){
-  const r = await apiGet({action:'stock_get', num});
-  return r.ok ? r.data : null;
-}
-
-async function lookupDesdeCodigo(e){
-  if(e.key!=='Enter' && e.key!=='Tab') return;
-  e.preventDefault();
-  const code = (qs('#inpCodigo').value||'').trim();
-  if(!code){ qs('#inpDesc').focus(); return; }
-  showFinding();
-  try{
-    const it = await buscarStock(code);
-    if(it){
-      qs('#inpDesc').value = it.descripcion || '';
-      setFormatted(qs('#inpUnit'), String(parseInt(it.precio||0,10)));
-      recalcDosMedios();
-    }
-  } finally { hideFinding(); qs('#inpDesc').focus(); }
-}
-
-/* ===== Dos medios de pago (UI) ===== */
-function toggleTwoPay(){
-  const two = qs('#fdp').value === '__2__';
-  qs('#twoPayBox').classList.toggle('hidden', !two);
-  if(!two){
-    qs('#fdp1').value=''; qs('#fdp2').value='';
-    setFormatted(qs('#monto1'), ''); setFormatted(qs('#monto2'), '');
-  }else{
-    const total = getNumber(qs('#inpUnit'));
-    setFormatted(qs('#monto1'), '0');
-    setFormatted(qs('#monto2'), String(total));
-  }
-}
-
-function recalcDosMedios(){
-  if(qs('#fdp').value !== '__2__') return;
-  const total = getNumber(qs('#inpUnit'));
-  let m1 = getNumber(qs('#monto1'));
-  if(m1<0) m1 = 0;
-  if(m1>total) m1 = total;
-  setFormatted(qs('#monto1'), String(m1));
-  setFormatted(qs('#monto2'), String(Math.max(total - m1, 0)));
-}
-
-/* ===== Helpers ===== */
-function limpiarCamposVenta(){
-  qs('#inpCodigo').value=''; qs('#inpDesc').value='';
-  setFormatted(qs('#inpUnit'), '');
-  qs('#inpRubro').value=''; qs('#fdp').value=''; qs('#obs').value='';
-  toggleTwoPay();
-}
-
-/* ===== Guardar venta ===== */
-async function guardarVenta(){
-  if(SAVING) return;
-  const emp=getEmp(); if(!emp){ showLogin(); return; }
-
-  const codigo=(qs('#inpCodigo').value||'').trim();
-  const rubro =qs('#inpRubro').value;
-  const desc  =(qs('#inpDesc').value||'').trim();
-  const total =getNumber(qs('#inpUnit'));
-  const fdpSel=qs('#fdp').value;
-  const obs   =(qs('#obs').value||'').trim();
-
-  if(!rubro){ Swal.fire('Falta rubro','Elegí un rubro.','warning'); qs('#inpRubro').focus(); return; }
-  if(!fdpSel){ Swal.fire('Falta forma de pago','Elegí la forma de pago.','warning'); qs('#fdp').focus(); return; }
-  if(!desc || total<=0){ Swal.fire('Faltan datos','Completá descripción y precio > 0.','warning'); if(!desc) qs('#inpDesc').focus(); else qs('#inpUnit').focus(); return; }
-
-  const descFinal = `${rubro}: ${desc}`.trim();
-
-  try{
-    SAVING=true; qs('#btnAgregar').disabled=true; showSaving();
-
-    if(fdpSel !== '__2__'){
-      const res = await apiPost({
-        action:'venta_add',
-        empleadoCodigo: emp.codigo,
-        fdp: fdpSel,
-        monto: total,
-        numItem: codigo,
-        precioItem: total,
-        descripcion: descFinal,
-        obs
-      });
-      if(!res.ok) throw new Error(res.error||'No se pudo guardar.');
-    }else{
-      const f1 = qs('#fdp1').value, f2 = qs('#fdp2').value;
-      const m1 = getNumber(qs('#monto1')), m2 = getNumber(qs('#monto2'));
-      if(!f1 || !f2){ throw new Error('Elegí ambas formas de pago.'); }
-      if( (m1+m2) !== total ){ throw new Error('La suma de montos debe igualar el total.'); }
-
-      const r1 = await apiPost({ action:'venta_add', empleadoCodigo: emp.codigo, fdp: f1, monto: m1, numItem: codigo, precioItem: total, descripcion: descFinal, obs });
-      if(!r1.ok) throw new Error(r1.error||'No se pudo guardar el primer pago.');
-
-      const r2 = await apiPost({ action:'venta_add', empleadoCodigo: emp.codigo, fdp: f2, monto: m2, numItem: codigo, precioItem: 0, descripcion: descFinal, obs });
-      if(!r2.ok) throw new Error(r2.error||'No se pudo guardar el segundo pago.');
-    }
-
-    qs('#btnAgregar').disabled=false; SAVING=false; closeSaving();
-    await cargarUltimas();
-    limpiarCamposVenta();
-    Swal.fire({icon:'success', title:'Venta registrada', timer:900, showConfirmButton:false});
-    setTimeout(()=>{ showLogin(); }, 650);
-
-  }catch(e){
-    qs('#btnAgregar').disabled=false; SAVING=false; closeSaving();
-    Swal.fire('Error', e.message||'No se pudo guardar.', 'error');
-  }
-}
-
-/* ===== Panel retiros / cierre ===== */
-function toggleAutorizados(){
-  const emp=getEmp();
-  const isAuth = !!(emp && WITHDRAW_AUTH.includes((emp.codigo||'').toUpperCase()));
-  qs('#panelRetiros').classList.toggle('hidden', !isAuth);
-}
-async function registrarMov(){
-  const emp=getEmp(); if(!emp){ showLogin(); return; }
-  showMov();
-  try{
-    const monto = getNumber(qs('#montoMov'));
-    const res=await apiPost({action:'mov_add', empleadoCodigo:emp.codigo, tipo:qs('#tipoMov').value, monto, descripcion:qs('#descMov').value.trim()});
-    if(res.ok){ setFormatted(qs('#montoMov'), ''); qs('#descMov').value=''; Swal.fire({icon:'success', title:'Movimiento registrado', timer:1100, showConfirmButton:false}); }
-    else{ Swal.fire('Error', res.error||'No se pudo guardar el movimiento','error'); }
-  }catch(e){ Swal.fire('Error de red', e.message||'Falló la conexión','error'); }
-  finally{ hideMov(); }
-}
-async function generarCierre(){
-  const emp=getEmp(); if(!emp){ showLogin(); return; }
-  if(!WITHDRAW_AUTH.includes(emp.codigo)){ Swal.fire('No autorizado','','warning'); return; }
-  const d=qs('#cierreDate').value||new Date().toISOString().slice(0,10);
-  Swal.fire({title:'Generando PDF…',allowOutsideClick:false,didOpen:()=>Swal.showLoading()});
-  try{
-    const r=await apiGet({action:'cierre_pdf', code:emp.codigo, date:d});
-    Swal.close();
-    if(r.ok&&r.data&&r.data.url){ window.open(r.data.url,'_blank'); Swal.fire('Cierre generado', r.data.name||'Listo para imprimir','success'); }
-    else{ Swal.fire('Error', (r&&r.error)||'No se pudo generar el PDF','error'); }
-  }catch(e){ Swal.close(); Swal.fire('Error de red', e.message||'Falló la conexión','error'); }
-}
-
-/* ===== Login ===== */
-async function doLogin(){
-  const code=(qs('#empCode').value||'').trim().toUpperCase();
-  if(!code) return;
-  qs('#loginMsg').textContent='Verificando empleado...';
-  const r=await apiGet({action:'login', code});
-  const m=qs('#loginMsg');
-  if(r.ok){ setEmp(r.data); m.textContent=''; hideLogin(); qs('#inpCodigo').focus(); }
-  else { m.textContent=r.error||'Código inválido'; }
-}
-
-/* ===== Init ===== */
-function init(){
-  const d=new Date();
-  qs('#hoy').textContent=d.toLocaleDateString('es-AR',{weekday:'short',day:'2-digit',month:'2-digit',year:'numeric'});
-  qs('#fechaHoy').textContent=d.toLocaleDateString('es-AR');
-
-  // máscaras de dinero
-  attachMoneyMask('#inpUnit');
-  attachMoneyMask('#monto1');
-  attachMoneyMask('#monto2'); // aunque sea readonly, asegura formato si se setea por código
-  attachMoneyMask('#montoMov');
-
-  qs('#inpCodigo').addEventListener('keydown', lookupDesdeCodigo);
-  qs('#inpDesc').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); qs('#inpUnit').focus(); }});
-
-  qs('#fdp').addEventListener('change', ()=>{ toggleTwoPay(); recalcDosMedios(); });
-  qs('#monto1').addEventListener('input', recalcDosMedios);
-
-  qs('#btnAgregar').onclick = guardarVenta;
-  qs('#btnMov').onclick = registrarMov;
-  qs('#btnCierre').onclick = generarCierre;
-
-  qs('#btnLogin').onclick=doLogin;
-  qs('#empCode').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); doLogin(); }});
-  qs('#btnCambiar').onclick=showLogin;
-
-  // Atajo F9 para guardar
-  document.addEventListener('keydown', (e)=>{
-    if (e.key === 'F9' || e.keyCode === 120) { e.preventDefault(); guardarVenta(); }
-  });
-
-  showLogin();
-  const modal = qs('#loginModal');
-  new MutationObserver(()=>setTimeout(()=>qs('#empCode').focus(),120)).observe(modal,{attributes:true,attributeFilter:['class']});
-
-  cargarUltimas();
-}
-init();
-</script>
-</body>
-</html>
+    <b>Registrando movimiento…<
